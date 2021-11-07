@@ -22,6 +22,8 @@ function setBinaryPath(path) {
   }
 }
 
+const repoPath = process.env.GITHUB_WORKSPACE;
+
 const [ , , platform, libc, binaryType ] = process.argv;
 
 if (typeof platform !== 'string' || !platform) {
@@ -34,7 +36,7 @@ if (typeof libc !== 'string' || !libc) {
   process.exit(1);
 }
 
-const baseDir = resolve(__dirname, '..', 'build');
+const baseDir = resolve(join(repoPath, 'build'));
 const outDir = join(baseDir, 'prepared');
 const addonBaseDir = join(baseDir, 'Release');
 
@@ -47,7 +49,7 @@ const {
   target_arch: arch,
 } = buildConfig;
 
-const { version } = require(resolve(__dirname, '..', 'package.json'));
+const { version } = require(join(repoPath, 'package.json'));
 
 let found = false;
 for (const filename of readdirSync(addonBaseDir)) {
