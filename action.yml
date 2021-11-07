@@ -34,7 +34,7 @@ runs:
           let buildDeps;
           let prebuildCmd;
 
-          core.startGroup('Reading package info');
+          core.startGroup('Read package info');
           const pkg = require('./package.json');
           const ns = pkg.buildorbinary;
           const kv = {
@@ -87,6 +87,7 @@ runs:
       uses: actions/github-script@v5
       with:
         script: |
+          core.startGroup('Build');
           const { spawnSync } = require('child_process');
           const run = (cmd) => {
             const { error } = spawnSync(cmd, {
@@ -111,6 +112,7 @@ runs:
               run(`node-gyp --arch=${{ matrix.job.arch }} --msvs_version=${{ matrix.job.msvs }} rebuild`);
               break;
           }
+          core.endGroup();
 
     - name: Verify build
       uses: actions/github-script@v5
@@ -150,22 +152,34 @@ runs:
           }
 
     - name: Copy build output
-      run: |
-        PLATFORM="$(node -pe 'process.platform')"
-        case "$PLATFORM" in
-          linux)
-            node ${{ github.action_path }}/copybinaries.js 'linux_${{ matrix.job.kernel }}' '${{ matrix.job.libc }}_${{ matrix.job.libcver }}' '${{ env.binary_type }}'
-            ;;
-          darwin)
-            node ${{ github.action_path }}/copybinaries.js 'darwin_${{ matrix.job.macos }}' 'bsd_${{ matrix.job.macos }}' '${{ env.binary_type }}'
-            ;;
-          win32)
-            node ${{ github.action_path }}/copybinaries.js 'win32_${{ matrix.job.winos }}' 'vc_${{ matrix.job.vc }}' '${{ env.binary_type }}'
-            ;;
-        esac
-      shell: bash
+      uses: actions/github-script@v5
+      with:
+        script: |
+          core.startGroup('Copy build output');
+          const { spawnSync } = require('child_process');
+          const run = (cmd) => {
+            const { error } = spawnSync(cmd, {
+              stdio: 'inherit',
+              shell: (process.platform === 'win32' ? true : '/bin/bash'),
+            });
+            if (error)
+              throw error;
+          }
+          switch (process.platform) {
+            case 'linux':
+              run(`node ${{ github.action_path }}/copybinaries.js 'linux_${{ matrix.job.kernel }}' '${{ matrix.job.libc }}_${{ matrix.job.libcver }}' '${{ env.binary_type }}'`);
+              break;
+            case 'darwin':
+              run(`node ${{ github.action_path }}/copybinaries.js 'darwin_${{ matrix.job.macos }}' 'bsd_${{ matrix.job.macos }}' '${{ env.binary_type }}'`);
+              break;
+            case 'win32':
+              run(`node ${{ github.action_path }}/copybinaries.js 'win32_${{ matrix.job.winos }}' 'vc_${{ matrix.job.vc }}' '${{ env.binary_type }}'`);
+              break;
+          }
+          core.endGroup();
 
-    - uses: ncipollo/release-action@v1
+    - name: 'Upload binary to release'
+      uses: ncipollo/release-action@v1
       with:
         tag: ${{ env.ver_tag }}
         prerelease: false
