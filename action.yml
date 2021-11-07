@@ -1,5 +1,9 @@
 name: 'Build Binaries'
 description: 'Build Node.js addon binaries for releases'
+inputs:
+  token:
+    description: 'Github auth token'
+    required: true
 runs:
   using: "composite"
   steps:
@@ -171,4 +175,4 @@ runs:
         removeArtifacts: false
         artifacts: ${{ env.binary_path }}
         artifactContentType: ${{ env.binary_type }}
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ inputs.token }}
