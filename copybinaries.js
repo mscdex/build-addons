@@ -24,7 +24,12 @@ function setBinaryPath(path) {
 
 const repoPath = process.env.GITHUB_WORKSPACE;
 
-const [ , , platform, libc, binaryType ] = process.argv;
+const [ , , napiVer, platform, libc, binaryType ] = process.argv;
+
+if (typeof napiVer !== 'string' || !napiVer) {
+  console.error('Missing node API argument');
+  process.exit(1);
+}
 
 if (typeof platform !== 'string' || !platform) {
   console.error('Missing platform argument');
@@ -61,7 +66,7 @@ for (const filename of readdirSync(addonBaseDir)) {
   mkdirSync(outDir, { recursive: true });
 
   const newFilename =
-    `v${version}-${moduleVer}-${platform}-${libc}-${arch}.node`;
+    `v${version}-m${moduleVer}-n${napiVer}-${platform}-${libc}-${arch}.node`;
 
   console.log(`${filename} => ${newFilename}`);
 

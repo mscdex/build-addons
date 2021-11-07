@@ -1,9 +1,21 @@
-name: 'Build Binaries'
+name: 'Build Addons'
 description: 'Build Node.js addon binaries for releases'
 inputs:
+  releaseID:
+    description: 'Release ID of the release to upload assets to'
+    required: true
+  binaryType:
+    description: 'Binary type: application/gzip or application/octet-stream'
+    default: application/gzip
+    required: false
+  buildOnlyPaths:
+    description: 'List of file/dir paths needed only for compiling'
+    default: ''
+    required: false
   token:
     description: 'Github auth token'
-    required: true
+    default: ${{ github.token }}
+    required: false
 runs:
   using: "composite"
   steps:
@@ -19,27 +31,46 @@ runs:
       uses: actions/github-script@v5
       with:
         script: |
-          const { appendFileSync } = require('fs');
+          const XTOOLS_BASEURL = 'https://github.com/mscdex/node-xtools/releases/download';
+          const XTOOLS_VER = 'v1.0.0';
 
-          const { spawnSync } = require('child_process');
+          const { appendFileSync } = require('fs');
+          const { execSync, spawnSync } = require('child_process');
+
           const run = (cmd) => {
-            const { error } = spawnSync(cmd, {
+            const { error, status } = spawnSync(cmd, {
               stdio: 'inherit',
               shell: (process.platform === 'win32' ? true : '/bin/bash'),
             });
-            if (error)
-              throw error;
+            if (error) {
+              core.setFailed(error.message);
+              process.exit(1);
+            }
+            if (status !== 0) {
+              core.setFailed('Command failed');
+              process.exit(1);
+            }
           }
 
           let buildDeps;
           let prebuildCmd;
+          let napi_ver = ${{ toJson(matrix.job.napi) }};
+
+          if ((typeof napi_ver !== 'number' || !isFinite(napi_ver))
+              && (typeof napi_ver !== 'string' || !napi_ver)) {
+            napi_ver = execSync(
+              'node -pe process.versions.napi',
+              { encoding: 'utf8' }
+            ).trim();
+          }
 
           core.startGroup('Read package info');
           const pkg = require('./package.json');
-          const ns = pkg.buildorbinary;
+          const ns = pkg['install-addons'];
           const kv = {
             ver_tag: `v${pkg.version}`,
             bin_path: ns.binaryOutPath,
+            napi_ver,
           };
 
           if (typeof ns === 'object' && ns !== null) {
@@ -63,7 +94,7 @@ runs:
 
           if (process.platform === 'linux') {
             core.startGroup('Download ${{ matrix.job.arch }} toolchain');
-            run(`mkdir .xtools && curl -L ${{ env.xtools_baseurl }}/${{ env.xtools_ver }}-${{ matrix.job.arch }}-${{ matrix.job.libc }}${{ matrix.job.libcver }}-kernel${{ matrix.job.kernel }}/${{ matrix.job.arch }}.tar.xz | tar -C .xtools -J -x`);
+            run(`mkdir .xtools && curl -L ${XTOOLS_BASEURL}/${XTOOLS_VER}-${{ matrix.job.arch }}-${{ matrix.job.libc }}${{ matrix.job.libcver }}-kernel${{ matrix.job.kernel }}/${{ matrix.job.arch }}.tar.xz | tar -C .xtools -J -x`);
             core.endGroup();
           }
 
@@ -90,12 +121,18 @@ runs:
           core.startGroup('Build');
           const { spawnSync } = require('child_process');
           const run = (cmd) => {
-            const { error } = spawnSync(cmd, {
+            const { error, status } = spawnSync(cmd, {
               stdio: 'inherit',
               shell: (process.platform === 'win32' ? true : '/bin/bash'),
             });
-            if (error)
-              throw error;
+            if (error) {
+              core.setFailed(error.message);
+              process.exit(1);
+            }
+            if (status !== 0) {
+              core.setFailed('Command failed');
+              process.exit(1);
+            }
           }
           switch (process.platform) {
             case 'linux':
@@ -103,7 +140,7 @@ runs:
               break;
             case 'darwin':
               process.env.MACOSX_DEPLOYMENT_TARGET = `${{ matrix.job.macos }}`;
-              for (const name of [`CXXFLAGS`, `CFLAGS`, `LDFLAGS`])
+              for (const name of ['CXXFLAGS', 'CFLAGS', 'LDFLAGS'])
                 process.env[name] = `-mmacosx-version-min=${{ matrix.job.macos }}`;
               run(`node-gyp --arch=${{ matrix.job.arch }} rebuild`);
               break;
@@ -120,34 +157,45 @@ runs:
         script: |
           const { spawnSync } = require('child_process');
           const { statSync } = require('fs');
+          const { join } = require('path');
 
           const run = (cmd) => {
-            const { error } = spawnSync(cmd, {
+            const { error, status } = spawnSync(cmd, {
               stdio: 'inherit',
               shell: (process.platform === 'win32' ? true : '/bin/bash'),
             });
-            if (error)
-              throw error;
+            if (error) {
+              core.setFailed(error.message);
+              process.exit(1);
+            }
+            if (status !== 0) {
+              core.setFailed('Command failed');
+              process.exit(1);
+            }
           }
 
           core.startGroup('Check for build output existence');
+          const fullBinPath = join(
+            process.env.GITHUB_WORKSPACE,
+            `${{ env.bin_path }}`
+          );
           try {
-            const st = statSync(`${{ env.bin_path }}`);
+            const st = statSync(fullBinPath);
             if (!st.isFile() || st.size === 0)
               throw new Error('Bad build output');
           } catch (ex) {
-            core.error('Build output not found');
+            core.setFailed('Build output not found');
             process.exit(1);
           }
           core.endGroup();
 
           core.startGroup('Check build output type');
-          run(`file ${{ env.bin_path }}`);
+          run(`file "${fullBinPath}"`);
           core.endGroup();
 
           if (process.platform === 'darwin') {
             core.startGroup('Check minimum macOS version for build output');
-            run(`otool -l  | grep -A 3 LC_VERSION_MIN_MACOSX`);
+            run(`otool -l "${fullBinPath}" | grep -A 3 LC_VERSION_MIN_MACOSX`);
             core.endGroup();
           }
 
@@ -155,38 +203,148 @@ runs:
       uses: actions/github-script@v5
       with:
         script: |
-          core.startGroup('Copy build output');
           const { spawnSync } = require('child_process');
-          const run = (cmd) => {
-            const { error } = spawnSync(cmd, {
+          const { writeFileSync } = require('fs');
+          const { join, win32: { join: winJoin } } = require('path');
+
+          const runArgs = (cmd, args) => {
+            const { error, status } = spawnSync(cmd, args, {
               stdio: 'inherit',
-              shell: (process.platform === 'win32' ? true : '/bin/bash'),
+              shell: false,
             });
-            if (error)
-              throw error;
+            if (error) {
+              core.setFailed(error.message);
+              process.exit(1);
+            }
+            if (status !== 0) {
+              core.setFailed('Command failed');
+              process.exit(1);
+            }
           }
+
+          core.startGroup('Copy build output');
           switch (process.platform) {
             case 'linux':
-              run(`node ${{ github.action_path }}/copybinaries.js 'linux_${{ matrix.job.kernel }}' '${{ matrix.job.libc }}_${{ matrix.job.libcver }}' '${{ env.binary_type }}'`);
+              runArgs('node', [
+                `${{ github.action_path }}/copybinaries.js`,
+                `${{ env.napi_ver }}`,
+                `linux_${{ matrix.job.kernel }}`,
+                `${{ matrix.job.libc }}_${{ matrix.job.libcver }}`,
+                ${{ toJson(inputs.binaryType) }}
+              ]);
               break;
             case 'darwin':
-              run(`node ${{ github.action_path }}/copybinaries.js 'darwin_${{ matrix.job.macos }}' 'bsd_${{ matrix.job.macos }}' '${{ env.binary_type }}'`);
+              runArgs('node', [
+                `${{ github.action_path }}/copybinaries.js`,
+                `${{ env.napi_ver }}`,
+                `darwin_${{ matrix.job.macos }}`,
+                `bsd_${{ matrix.job.macos }}`,
+                ${{ toJson(inputs.binaryType) }}
+              ]);
               break;
             case 'win32':
-              run(`node ${{ github.action_path }}/copybinaries.js 'win32_${{ matrix.job.winos }}' 'vc_${{ matrix.job.vc }}' '${{ env.binary_type }}'`);
+              runArgs('node', [
+                winJoin(process.env.GITHUB_ACTION_PATH, `copybinaries.js`),
+                `${{ env.napi_ver }}`,
+                `win32_${{ matrix.job.winos }}`,
+                `vc_${{ matrix.job.vc }}`,
+                ${{ toJson(inputs.binaryType) }}
+              ]);
               break;
           }
           core.endGroup();
 
-    - name: 'Upload binary to release'
-      uses: ncipollo/release-action@v1
+          let buildOnlyPaths =
+            JSON.parse(`${{ toJson(inputs.buildOnlyPaths) }}`);
+          if (typeof buildOnlyPaths === 'string' && buildOnlyPaths)
+            buildOnlyPaths = buildOnlyPaths.split(',');
+          if (Array.isArray(buildOnlyPaths)
+              && buildOnlyPaths.length
+              && ${{ strategy.job-index }} === 0) {
+            const tag = ${{ toJson(env.ver_tag) }};
+            const baseDir = join(
+              process.env.GITHUB_WORKSPACE,
+              'build',
+              'prepared',
+            );
+            const pathsListPath = join(baseDir, 'MINBUILD_PATHS');
+            const tarPath = join(baseDir, `${tag}-minbuild.tar`);
+
+            core.startGroup('Create minimal build tarball');
+            writeFileSync(pathsListPath, `${buildOnlyPaths.join('\n')}\n`);
+            runArgs('tar', [
+              '-C', process.env.GITHUB_WORKSPACE,
+              '-c',
+              '-f', tarPath,
+              '-T', pathsListPath,
+            ]);
+            runArgs('gzip', [ '-9', tarPath ]);
+            core.endGroup();
+          }
+
+    - name: Upload asset(s) to release
+      uses: actions/github-script@v5
       with:
-        tag: ${{ env.ver_tag }}
-        prerelease: false
-        draft: true
-        allowUpdates: true
-        replacesArtifacts: true
-        removeArtifacts: false
-        artifacts: ${{ env.binary_path }}
-        artifactContentType: ${{ env.binary_type }}
-        token: ${{ inputs.token }}
+        script: |
+          const { createHash } = require('crypto');
+          const { accessSync, constants, readFileSync } = require('fs');
+          const { basename, join } = require('path');
+
+          const { repo: { owner, repo } } = context;
+          const tag = ${{ toJson(env.ver_tag) }};
+          const data = readFileSync(${{ toJson(env.binary_path) }});
+          const name = basename(${{ toJson(env.binary_path) }});
+          const release_id = `${{ inputs.releaseID }}`;
+
+          const hash = (buf) => createHash('sha256').update(buf).digest('hex');
+
+          await github.rest.repos.uploadReleaseAsset({
+            owner,
+            repo,
+            headers: { 'Content-Type': ${{ toJson(inputs.binaryType) }} },
+            release_id,
+            name,
+            data,
+          });
+          await github.rest.repos.uploadReleaseAsset({
+            owner,
+            repo,
+            headers: { 'Content-Type': 'text/plain' },
+            release_id,
+            name: `${name}.sha256sum`,
+            data: hash(data),
+          });
+
+          if (${{ strategy.job-index }} === 0) {
+            const minBuildFilename = `${tag}-minbuild.tar.gz`;
+            const minBuildPath = join(
+              process.env.GITHUB_WORKSPACE,
+              'build',
+              'prepared',
+              minBuildFilename
+            );
+            try {
+              accessSync(minBuildPath, constants.R_OK);
+            } catch {
+              return;
+            }
+            const minBuildData = readFileSync(minBuildPath);
+            await github.rest.repos.uploadReleaseAsset({
+              owner,
+              repo,
+              headers: {
+                'Content-Type': 'application/gzip',
+              },
+              release_id,
+              name: minBuildFilename,
+              data: minBuildData,
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner,
+              repo,
+              headers: { 'Content-Type': 'text/plain' },
+              release_id,
+              name: `${minBuildFilename}.sha256sum`,
+              data: hash(minBuildData),
+            });
+          }
