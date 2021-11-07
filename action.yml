@@ -1,0 +1,174 @@
+name: 'Build Binaries'
+description: 'Build Node.js addon binaries for releases'
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout source code
+      uses: actions/checkout@v2
+
+    - name: Use Node.js ${{ matrix.job.node }}
+      uses: actions/setup-node@v2
+      with:
+        node-version: ${{ matrix.job.node }}
+
+    - name: Prepare build environment
+      uses: actions/github-script@v5
+      with:
+        script: |
+          const { appendFileSync } = require('fs');
+
+          const { spawnSync } = require('child_process');
+          const run = (cmd) => {
+            const { error } = spawnSync(cmd, {
+              stdio: 'inherit',
+              shell: (process.platform === 'win32' ? true : '/bin/bash'),
+            });
+            if (error)
+              throw error;
+          }
+
+          let buildDeps;
+          let prebuildCmd;
+
+          core.startGroup('Reading package info');
+          const pkg = require('./package.json');
+          const ns = pkg.buildorbinary;
+          const kv = {
+            ver_tag: `v${pkg.version}`,
+            bin_path: ns.binaryOutPath,
+          };
+
+          if (typeof ns === 'object' && ns !== null) {
+            if (typeof ns.buildDependencies === 'object'
+                && ns.buildDependencies !== null) {
+              buildDeps =
+                Object.entries(ns.buildDependencies)
+                      .map((nameVer) => `${nameVer[0]}@"${nameVer[1]}"`)
+                      .join(' ');
+            }
+            if (ns.preBuildCommand)
+              prebuildCmd = ns.preBuildCommand;
+          }
+
+          for (let [key, val] of Object.entries(kv)) {
+            if (typeof val !== 'string')
+              val = '';
+            appendFileSync(process.env.GITHUB_ENV, `${key}=${val}\n`);
+          }
+          core.endGroup();
+
+          if (process.platform === 'linux') {
+            core.startGroup('Download ${{ matrix.job.arch }} toolchain');
+            run(`mkdir .xtools && curl -L ${{ env.xtools_baseurl }}/${{ env.xtools_ver }}-${{ matrix.job.arch }}-${{ matrix.job.libc }}${{ matrix.job.libcver }}-kernel${{ matrix.job.kernel }}/${{ matrix.job.arch }}.tar.xz | tar -C .xtools -J -x`);
+            core.endGroup();
+          }
+
+          core.startGroup('Install node-gyp');
+          run(`npm install --only=production node-gyp -g`);
+          core.endGroup();
+
+          if (buildDeps && buildDeps.length > 0) {
+            core.startGroup('Install project build dependencies');
+            run(`npm install --only=production ${buildDeps}`);
+            core.endGroup();
+          }
+
+          if (typeof prebuildCmd === 'string' && prebuildCmd) {
+            core.startGroup('Run pre-build command');
+            run(prebuildCmd);
+            core.endGroup();
+          }
+
+    - name: Build
+      uses: actions/github-script@v5
+      with:
+        script: |
+          const { spawnSync } = require('child_process');
+          const run = (cmd) => {
+            const { error } = spawnSync(cmd, {
+              stdio: 'inherit',
+              shell: (process.platform === 'win32' ? true : '/bin/bash'),
+            });
+            if (error)
+              throw error;
+          }
+          switch (process.platform) {
+            case 'linux':
+              run(`source .xtools/${{ matrix.job.arch }}/setup.sh && node-gyp --arch=${{ matrix.job.arch }} rebuild`);
+              break;
+            case 'darwin':
+              process.env.MACOSX_DEPLOYMENT_TARGET = `${{ matrix.job.macos }}`;
+              for (const name of [`CXXFLAGS`, `CFLAGS`, `LDFLAGS`])
+                process.env[name] = `-mmacosx-version-min=${{ matrix.job.macos }}`;
+              run(`node-gyp --arch=${{ matrix.job.arch }} rebuild`);
+              break;
+            case 'win32':
+              process.env.CL = `/D _WIN32_WINNT#${{ matrix.job.winosflag }}`;
+              run(`node-gyp --arch=${{ matrix.job.arch }} --msvs_version=${{ matrix.job.msvs }} rebuild`);
+              break;
+          }
+
+    - name: Verify build
+      uses: actions/github-script@v5
+      with:
+        script: |
+          const { spawnSync } = require('child_process');
+          const { statSync } = require('fs');
+
+          const run = (cmd) => {
+            const { error } = spawnSync(cmd, {
+              stdio: 'inherit',
+              shell: (process.platform === 'win32' ? true : '/bin/bash'),
+            });
+            if (error)
+              throw error;
+          }
+
+          core.startGroup('Check for build output existence');
+          try {
+            const st = statSync(`${{ env.bin_path }}`);
+            if (!st.isFile() || st.size === 0)
+              throw new Error('Bad build output');
+          } catch (ex) {
+            core.error('Build output not found');
+            process.exit(1);
+          }
+          core.endGroup();
+
+          core.startGroup('Check build output type');
+          run(`file ${{ env.bin_path }}`);
+          core.endGroup();
+
+          if (process.platform === 'darwin') {
+            core.startGroup('Check minimum macOS version for build output');
+            run(`otool -l  | grep -A 3 LC_VERSION_MIN_MACOSX`);
+            core.endGroup();
+          }
+
+    - name: Copy build output
+      run: |
+        PLATFORM="$(node -pe 'process.platform')"
+        case "$PLATFORM" in
+          linux)
+            node ${{ github.action_path }}/copybinaries.js 'linux_${{ matrix.job.kernel }}' '${{ matrix.job.libc }}_${{ matrix.job.libcver }}' '${{ env.binary_type }}'
+            ;;
+          darwin)
+            node ${{ github.action_path }}/copybinaries.js 'darwin_${{ matrix.job.macos }}' 'bsd_${{ matrix.job.macos }}' '${{ env.binary_type }}'
+            ;;
+          win32)
+            node ${{ github.action_path }}/copybinaries.js 'win32_${{ matrix.job.winos }}' 'vc_${{ matrix.job.vc }}' '${{ env.binary_type }}'
+            ;;
+        esac
+      shell: bash
+
+    - uses: ncipollo/release-action@v1
+      with:
+        tag: ${{ env.ver_tag }}
+        prerelease: false
+        draft: true
+        allowUpdates: true
+        replacesArtifacts: true
+        removeArtifacts: false
+        artifacts: ${{ env.binary_path }}
+        artifactContentType: ${{ env.binary_type }}
+        token: ${{ secrets.GITHUB_TOKEN }}
