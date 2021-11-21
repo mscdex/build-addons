@@ -31,7 +31,8 @@ runs:
       uses: actions/github-script@v5
       with:
         script: |
-          const XTOOLS_BASEURL = 'https://github.com/mscdex/node-xtools/releases/download';
+          const XTOOLS_BASEURL =
+            'https://github.com/mscdex/node-xtools/releases/download';
           const XTOOLS_VER = 'v1.0.0';
 
           const { appendFileSync } = require('fs');
@@ -94,7 +95,14 @@ runs:
 
           if (process.platform === 'linux') {
             core.startGroup('Download ${{ matrix.job.arch }} toolchain');
-            run(`mkdir .xtools && curl -L ${XTOOLS_BASEURL}/${XTOOLS_VER}-${{ matrix.job.arch }}-${{ matrix.job.libc }}${{ matrix.job.libcver }}-kernel${{ matrix.job.kernel }}/${{ matrix.job.arch }}.tar.xz | tar -C .xtools -J -x`);
+            const url = [
+              XTOOLS_BASEURL,
+              XTOOLS_VER,
+              `${{ matrix.job.arch }}-`
+                + `${{ matrix.job.libc }}${{ matrix.job.libcver }}-`
+                + `kernel${{ matrix.job.kernel }}.tar.xz`
+            ].join('/');
+            run(`mkdir .xtools && curl -L ${url} | tar -C .xtools -J -x`);
             core.endGroup();
           }
 
@@ -136,17 +144,21 @@ runs:
           }
           switch (process.platform) {
             case 'linux':
-              run(`source .xtools/${{ matrix.job.arch }}/setup.sh && node-gyp --arch=${{ matrix.job.arch }} rebuild`);
+              run(`source .xtools/${{ matrix.job.arch }}/setup.sh `
+                  + `&& node-gyp --arch=${{ matrix.job.arch }} rebuild`);
               break;
             case 'darwin':
               process.env.MACOSX_DEPLOYMENT_TARGET = `${{ matrix.job.macos }}`;
-              for (const name of ['CXXFLAGS', 'CFLAGS', 'LDFLAGS'])
-                process.env[name] = `-mmacosx-version-min=${{ matrix.job.macos }}`;
+              for (const name of ['CXXFLAGS', 'CFLAGS', 'LDFLAGS']) {
+                process.env[name] =
+                  `-mmacosx-version-min=${{ matrix.job.macos }}`;
+              }
               run(`node-gyp --arch=${{ matrix.job.arch }} rebuild`);
               break;
             case 'win32':
               process.env.CL = `/D _WIN32_WINNT#${{ matrix.job.winosflag }}`;
-              run(`node-gyp --arch=${{ matrix.job.arch }} --msvs_version=${{ matrix.job.msvs }} rebuild`);
+              run(`node-gyp --arch=${{ matrix.job.arch }} `
+                  + `--msvs_version=${{ matrix.job.msvs }} rebuild`);
               break;
           }
           core.endGroup();
@@ -227,7 +239,7 @@ runs:
             case 'linux':
               runArgs('node', [
                 `${{ github.action_path }}/copybinaries.js`,
-                `${{ env.napi_ver }}`,
+                ${{ toJson(env.napi_ver) }},
                 `linux_${{ matrix.job.kernel }}`,
                 `${{ matrix.job.libc }}_${{ matrix.job.libcver }}`,
                 ${{ toJson(inputs.binaryType) }}
@@ -236,7 +248,7 @@ runs:
             case 'darwin':
               runArgs('node', [
                 `${{ github.action_path }}/copybinaries.js`,
-                `${{ env.napi_ver }}`,
+                ${{ toJson(env.napi_ver) }},
                 `darwin_${{ matrix.job.macos }}`,
                 `bsd_${{ matrix.job.macos }}`,
                 ${{ toJson(inputs.binaryType) }}
@@ -245,7 +257,7 @@ runs:
             case 'win32':
               runArgs('node', [
                 winJoin(process.env.GITHUB_ACTION_PATH, `copybinaries.js`),
-                `${{ env.napi_ver }}`,
+                ${{ toJson(env.napi_ver) }},
                 `win32_${{ matrix.job.winos }}`,
                 `vc_${{ matrix.job.vc }}`,
                 ${{ toJson(inputs.binaryType) }}
