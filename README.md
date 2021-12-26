@@ -36,7 +36,7 @@ and prebuild/prebuildify in that:
         * kernel 3.10 - glibc 2.17 - arm7 (armv7-a)
         * kernel 3.10 - musl 1.1.16 - x64 (amd64)
 
-  There is currently no support for nwjs/electron.
+  There is currently no support for nwjs.
 
 
 # How To Use
@@ -61,6 +61,12 @@ and prebuild/prebuildify in that:
 
       * Common job properties
         * `node` - The node version to compile against
+        * `electron` - The electron version to compile against
+          * When this is specified, `node` merely becomes the node version used
+            for running scripts during the build process
+          * **Note:** You will need to make sure that the libc and other values
+            that are dependent upon how electron was built (for the selected
+            platform) are set appropriately
         * `os` - The name of a valid Github Runner
         * `arch` - The architecture to compile for
       * Linux-specific properties
