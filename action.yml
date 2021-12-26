@@ -68,10 +68,18 @@ runs:
           core.startGroup('Read package info');
           const pkg = require('./package.json');
           const ns = pkg['install-addons'];
+          let electron = ${{ toJson(matrix.job.electron) }};
+          if ((typeof electron !== 'number' || !isFinite(electron))
+              && (typeof electron !== 'string' || !electron)) {
+            electron = '';
+          }
+          if (typeof electron === 'number')
+            electron = `${electron}.0.0`; // Assume major version number
           const kv = {
             ver_tag: `v${pkg.version}`,
             bin_path: ns.binaryOutPath,
             napi_ver,
+            electron,
           };
 
           if (typeof ns === 'object' && ns !== null) {
@@ -142,10 +150,17 @@ runs:
               process.exit(1);
             }
           }
+          let nodeGypArgs = [ `--arch=${{ matrix.job.arch }}` ];
+          const electron = ${{ toJson(env.electron) }};
+          if (electron) {
+            nodeGypArgs.push(`--target=${electron}`);
+            nodeGypArgs.push(`--dist-url=https://electronjs.org/headers`);
+          }
+          nodeGypArgs = nodeGypArgs.join(' ');
           switch (process.platform) {
             case 'linux':
               run(`source .xtools/${{ matrix.job.arch }}/setup.sh `
-                  + `&& node-gyp --arch=${{ matrix.job.arch }} rebuild`);
+                  + `&& node-gyp ${nodeGypArgs} rebuild`);
               break;
             case 'darwin':
               process.env.MACOSX_DEPLOYMENT_TARGET = `${{ matrix.job.macos }}`;
@@ -153,12 +168,12 @@ runs:
                 process.env[name] =
                   `-mmacosx-version-min=${{ matrix.job.macos }}`;
               }
-              run(`node-gyp --arch=${{ matrix.job.arch }} rebuild`);
+              run(`node-gyp ${nodeGypArgs} rebuild`);
               break;
             case 'win32':
               process.env.CL = `/D _WIN32_WINNT#${{ matrix.job.winosflag }}`;
-              run(`node-gyp --arch=${{ matrix.job.arch }} `
-                  + `--msvs_version=${{ matrix.job.msvs }} rebuild`);
+              nodeGypArgs += ` --msvs_version=${{ matrix.job.msvs }}`;
+              run(`node-gyp ${nodeGypArgs} rebuild`);
               break;
           }
           core.endGroup();
